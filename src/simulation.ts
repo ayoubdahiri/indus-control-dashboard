@@ -24,6 +24,8 @@ export const createInitialState = (now = Date.now()): SimulationState => ({
     vibration: machine.vibration,
     power: machine.power,
     production: machine.production,
+    productionDelta: 0,
+    energyKwh: 0,
   })),
   alarms: [],
   tick: 0,
@@ -34,6 +36,8 @@ const variation = (seed: number, magnitude: number) => (Math.sin(seed * 1.71) + 
 
 export function updateSimulation(state: SimulationState, now: number, thresholds: Thresholds = DEFAULT_THRESHOLDS): SimulationState {
   const tick = state.tick + 1;
+  const previousReadings = new Map(state.readings.filter((reading) => reading.timestamp === state.readings[state.readings.length - 1]?.timestamp).map((reading) => [reading.machineId, reading]));
+  const elapsedHours = Math.max(0, (now - (state.readings[state.readings.length - 1]?.timestamp ?? now)) / 3_600_000);
   const machines = state.machines.map((machine, index) => {
     const drift = variation(tick + index, 1);
     const faultBoost = machine.status === 'Fault' ? 8 : 0;
@@ -44,10 +48,25 @@ export function updateSimulation(state: SimulationState, now: number, thresholds
     return { ...machine, temperature, vibration, power, production: machine.production + increment, lastUpdated: now };
   });
   const newReadings: SensorReading[] = machines.map((machine) => ({
-    timestamp: now, machineId: machine.id, temperature: machine.temperature, vibration: machine.vibration, power: machine.power, production: machine.production,
+    timestamp: now,
+    machineId: machine.id,
+    temperature: machine.temperature,
+    vibration: machine.vibration,
+    power: machine.power,
+    production: machine.production,
+    productionDelta: Math.max(0, machine.production - (previousReadings.get(machine.id)?.production ?? machine.production)),
+    energyKwh: machine.power * elapsedHours,
   }));
   const readings = [...state.readings, ...newReadings].slice(-HISTORY_LIMIT * machines.length);
-  const alarms = [...state.alarms];
+  const alarms = state.alarms.map((alarm) => {
+    const machine = machines.find((item) => item.id === alarm.machineId);
+    if (!machine || !alarm.active) return alarm;
+    const metric = alarm.metric === 'status' ? 'temperature' : alarm.metric;
+    const currentValue = machine[metric];
+    const currentThreshold = thresholds[metric];
+    if (currentValue <= currentThreshold) return { ...alarm, active: false, clearedAt: now };
+    return alarm;
+  });
   for (const machine of machines) {
     const checks: Array<{ metric: Alarm['metric']; value: number; threshold: number; severity: Alarm['severity']; message: string }> = [
       { metric: 'temperature', value: machine.temperature, threshold: thresholds.temperature, severity: 'Warning', message: 'Temperature above configured limit' },
@@ -56,9 +75,9 @@ export function updateSimulation(state: SimulationState, now: number, thresholds
     ];
     for (const check of checks) {
       const active = check.value > check.threshold;
-      const hasOpenAlarm = alarms.some((alarm) => alarm.machineId === machine.id && alarm.metric === check.metric && !alarm.acknowledged);
+      const hasOpenAlarm = alarms.some((alarm) => alarm.machineId === machine.id && alarm.metric === check.metric && alarm.active);
       if (active && !hasOpenAlarm) {
-        alarms.unshift({ id: `${machine.id}-${check.metric}-${now}`, machineId: machine.id, machineName: machine.name, ...check, timestamp: now, acknowledged: false });
+        alarms.unshift({ id: `${machine.id}-${check.metric}-${now}`, machineId: machine.id, machineName: machine.name, ...check, timestamp: now, acknowledged: false, active: true });
       }
     }
   }

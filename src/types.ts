@@ -21,6 +21,8 @@ export interface SensorReading {
   vibration: number;
   power: number;
   production: number;
+  productionDelta: number;
+  energyKwh: number;
 }
 
 export interface Alarm {
@@ -34,6 +36,8 @@ export interface Alarm {
   threshold: number;
   timestamp: number;
   acknowledged: boolean;
+  active: boolean;
+  clearedAt?: number;
 }
 
 export interface SimulationState {
