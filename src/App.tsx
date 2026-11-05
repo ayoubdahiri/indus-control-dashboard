@@ -1,12 +1,14 @@
 import { useMemo, useState } from 'react';
-import { Activity, AlertTriangle, BarChart3, Bell, Boxes, CheckCircle2, CircleHelp, Factory, Gauge, LayoutDashboard, Menu, Pause, Play, RotateCcw, Settings2, ShieldCheck, Siren, Thermometer, Zap } from 'lucide-react';
+import { Activity, AlertTriangle, BarChart3, Bell, Boxes, CheckCircle2, CircleHelp, Download, Factory, Gauge, History as HistoryIcon, LayoutDashboard, Menu, Pause, Play, RotateCcw, Settings2, ShieldCheck, Siren, Thermometer, Trash2, Zap } from 'lucide-react';
 import { Area, AreaChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { useSimulation } from './hooks/useSimulation';
-import type { Alarm, Machine, MachineStatus } from './types';
+import { readingsToCsv } from './csv';
+import { calculateFleetOee, calculateOee } from './oee';
+import type { Alarm, HistoryMeasurement, Machine, MachineStatus } from './types';
 
 const statusStyles: Record<MachineStatus, string> = { Running: 'text-emerald-300 bg-emerald-400/10 border-emerald-400/20', Idle: 'text-amber-300 bg-amber-400/10 border-amber-400/20', Fault: 'text-red-300 bg-red-400/10 border-red-400/20' };
 const severityStyles: Record<Alarm['severity'], string> = { Critical: 'text-red-300 bg-red-400/10', Warning: 'text-amber-300 bg-amber-400/10', Info: 'text-sky-300 bg-sky-400/10' };
-const formatTime = (timestamp: number) => new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const formatTime = (timestamp: number, withSeconds = false) => new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', ...(withSeconds ? { second: '2-digit' } : {}) });
 const formatNumber = (value: number) => new Intl.NumberFormat('en-US').format(value);
 
 function App() {
@@ -15,12 +17,20 @@ function App() {
   const [statusFilter, setStatusFilter] = useState<'All' | MachineStatus>('All');
   const [mobileOpen, setMobileOpen] = useState(false);
   const [activeSection, setActiveSection] = useState('Overview');
+  const [historyMachineId, setHistoryMachineId] = useState('');
+  const [historyMeasurement, setHistoryMeasurement] = useState<HistoryMeasurement>('temperature');
   const selectedMachine = simulation.machines.find((machine) => machine.id === selectedMachineId);
+  const selectedHistoryMachineId = historyMachineId || simulation.machines[0]?.id || '';
   const filteredMachines = simulation.machines.filter((machine) => statusFilter === 'All' || machine.status === statusFilter);
   const totalProduction = simulation.machines.reduce((sum, machine) => sum + machine.production, 0);
   const totalTarget = simulation.machines.reduce((sum, machine) => sum + machine.target, 0);
   const efficiency = Math.round((totalProduction / totalTarget) * 100);
   const energyKwh = simulation.readings.reduce((sum, reading) => sum + reading.energyKwh, 0);
+  const fleetOee = calculateFleetOee(simulation.machines);
+  const historyData = useMemo(() => simulation.readings
+    .filter((reading) => reading.machineId === selectedHistoryMachineId)
+    .slice(-48)
+    .map((reading) => ({ time: formatTime(reading.timestamp, true), value: reading[historyMeasurement] })), [historyMeasurement, selectedHistoryMachineId, simulation.readings]);
   const chartData = useMemo(() => {
     const timestamps = [...new Set(simulation.readings.map((reading) => reading.timestamp))].slice(-18);
     return timestamps.map((timestamp) => {
@@ -33,6 +43,16 @@ function App() {
     document.getElementById(target)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     setMobileOpen(false);
   };
+  const exportHistory = () => {
+    const readings = simulation.readings.filter((reading) => !historyMachineId || reading.machineId === historyMachineId);
+    const blob = new Blob([readingsToCsv(readings, simulation.machines)], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `indus-control-history-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <div className="min-h-screen bg-navy text-slate-200">
@@ -44,7 +64,7 @@ function App() {
         <aside className={`${mobileOpen ? 'absolute inset-y-16 left-0 z-20 flex' : 'hidden'} w-64 shrink-0 border-r border-slate-800/80 bg-[#091726] p-4 md:relative md:flex md:min-h-[calc(100vh-4rem)] md:flex-col`}>
           <div className="mb-6 px-3 text-[10px] font-bold uppercase tracking-[.2em] text-slate-600">Operations center</div>
           <nav className="space-y-1">
-            {[['Overview', LayoutDashboard, 'overview'], ['Machines', Boxes, 'machines'], ['Production', BarChart3, 'production'], ['Alarms', Siren, 'alarms'], ['Configuration', Settings2, 'configuration']].map(([label, Icon, target]) => <button key={label as string} onClick={() => navigateTo(label as string, target as string)} aria-current={activeSection === label ? 'page' : undefined} className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm ${activeSection === label ? 'bg-cyan-400/10 font-semibold text-cyan-300' : 'text-slate-400 hover:bg-slate-800/70 hover:text-white'}`}><Icon size={17} />{label as string}{label === 'Alarms' && <span className="ml-auto rounded-full bg-red-400/15 px-2 py-0.5 text-[10px] text-red-300">{simulation.activeAlarms.length}</span>}</button>)}
+            {[['Overview', LayoutDashboard, 'overview'], ['Machines', Boxes, 'machines'], ['History', HistoryIcon, 'history'], ['Production', BarChart3, 'production'], ['OEE / TRS', Gauge, 'oee'], ['Alarms', Siren, 'alarms'], ['Configuration', Settings2, 'configuration']].map(([label, Icon, target]) => <button key={label as string} onClick={() => navigateTo(label as string, target as string)} aria-current={activeSection === label ? 'page' : undefined} className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm ${activeSection === label ? 'bg-cyan-400/10 font-semibold text-cyan-300' : 'text-slate-400 hover:bg-slate-800/70 hover:text-white'}`}><Icon size={17} />{label as string}{label === 'Alarms' && <span className="ml-auto rounded-full bg-red-400/15 px-2 py-0.5 text-[10px] text-red-300">{simulation.activeAlarms.length}</span>}</button>)}
           </nav>
           <div className="mt-auto rounded-2xl border border-slate-800 bg-[#0c1c2e] p-4"><div className="mb-3 flex items-center gap-2 text-xs font-bold text-white"><ShieldCheck size={16} className="text-emerald-300" /> System health</div><div className="mb-2 flex justify-between text-xs text-slate-500"><span>Network status</span><span className="text-emerald-300">Nominal</span></div><div className="h-1.5 overflow-hidden rounded-full bg-slate-800"><div className="h-full w-[98%] rounded-full bg-emerald-400" /></div><p className="mt-3 text-[10px] leading-relaxed text-slate-500">All data is synthetic. No physical equipment is connected.</p></div>
         </aside>
@@ -57,6 +77,13 @@ function App() {
             <MetricCard label="Energy consumed" value={`${energyKwh.toFixed(1)} kWh`} detail="Accumulated simulated energy" icon={Zap} accent="blue" />
             <MetricCard label="Active alarms" value={simulation.activeAlarms.length.toString().padStart(2, '0')} detail={simulation.activeAlarms.length ? 'Requires attention' : 'All systems nominal'} icon={AlertTriangle} accent={simulation.activeAlarms.length ? 'amber' : 'green'} />
           </section>
+          <section id="history" className="mb-5 scroll-mt-24">
+            <Panel title="Measurement history" subtitle="Local simulated telemetry retained in this browser" icon={HistoryIcon} action={<div className="flex gap-2"><button onClick={exportHistory} className="flex items-center gap-1 rounded-lg bg-cyan-400/10 px-2 py-1.5 text-[10px] font-bold text-cyan-300 hover:bg-cyan-400/20"><Download size={13} /> Export CSV</button><button onClick={simulation.clearHistory} className="flex items-center gap-1 rounded-lg bg-slate-800 px-2 py-1.5 text-[10px] font-bold text-slate-400 hover:text-white"><Trash2 size={13} /> Clear</button></div>}>
+              <div className="mb-4 flex flex-col gap-3 sm:flex-row"><label className="flex-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">Machine<select value={historyMachineId} onChange={(event) => setHistoryMachineId(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs font-semibold text-white"><option value="">All machines</option>{simulation.machines.map((machine) => <option key={machine.id} value={machine.id}>{machine.id} · {machine.name}</option>)}</select></label><label className="flex-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">Measurement<select value={historyMeasurement} onChange={(event) => setHistoryMeasurement(event.target.value as HistoryMeasurement)} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs font-semibold text-white"><option value="temperature">Temperature (°C)</option><option value="vibration">Vibration (mm/s)</option><option value="power">Power (kW)</option><option value="production">Production count (units)</option></select></label></div>
+              <div className="mb-3 text-[10px] text-slate-500">Showing the latest {historyData.length} records for {simulation.machines.find((machine) => machine.id === selectedHistoryMachineId)?.name ?? 'the selected machine'}. Retention is capped at 288 records locally; no real equipment is connected.</div>
+              <ChartFrame><ResponsiveContainer width="100%" height="100%"><LineChart data={historyData}><CartesianGrid stroke="#183047" strokeDasharray="3 3" vertical={false} /><XAxis dataKey="time" interval="preserveStartEnd" tick={{ fill: '#64748b', fontSize: 10 }} tickLine={false} axisLine={false} /><YAxis tick={{ fill: '#64748b', fontSize: 10 }} tickLine={false} axisLine={false} /><Tooltip contentStyle={{ background: '#0c1c2e', border: '1px solid #28435d', borderRadius: 8, fontSize: 11 }} /><Line type="monotone" dataKey="value" name={historyMeasurement} stroke="#2dd4bf" strokeWidth={2} dot={false} /></LineChart></ResponsiveContainer></ChartFrame>
+            </Panel>
+          </section>
           <section id="machines" className="mb-5 grid scroll-mt-24 gap-5 xl:grid-cols-[1.4fr_1fr]">
             <Panel title="Temperature history" subtitle="Average across monitored assets" icon={Thermometer} action={<span className="mono text-[10px] text-slate-500">LAST 36 MIN</span>}><ChartFrame><ResponsiveContainer width="100%" height="100%"><LineChart data={chartData}><CartesianGrid stroke="#183047" strokeDasharray="3 3" vertical={false} /><XAxis dataKey="time" tick={{ fill: '#64748b', fontSize: 10 }} tickLine={false} axisLine={false} /><YAxis domain={[30, 100]} tick={{ fill: '#64748b', fontSize: 10 }} tickLine={false} axisLine={false} width={30} /><Tooltip contentStyle={{ background: '#0c1c2e', border: '1px solid #28435d', borderRadius: 8, fontSize: 11 }} /><Line type="monotone" dataKey="temperature" name="Avg. °C" stroke="#2dd4bf" strokeWidth={2} dot={false} /></LineChart></ResponsiveContainer></ChartFrame></Panel>
             <Panel title="Energy consumption" subtitle="Accumulated interval energy" icon={Zap} action={<span className="mono text-[10px] text-amber-300">LIVE</span>}><ChartFrame><ResponsiveContainer width="100%" height="100%"><AreaChart data={chartData}><defs><linearGradient id="energy" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#38bdf8" stopOpacity=".4" /><stop offset="100%" stopColor="#38bdf8" stopOpacity="0" /></linearGradient></defs><CartesianGrid stroke="#183047" strokeDasharray="3 3" vertical={false} /><XAxis dataKey="time" tick={{ fill: '#64748b', fontSize: 10 }} tickLine={false} axisLine={false} /><YAxis tick={{ fill: '#64748b', fontSize: 10 }} tickLine={false} axisLine={false} width={35} /><Tooltip contentStyle={{ background: '#0c1c2e', border: '1px solid #28435d', borderRadius: 8, fontSize: 11 }} /><Area type="monotone" dataKey="energy" name="kWh" stroke="#38bdf8" fill="url(#energy)" strokeWidth={2} /></AreaChart></ResponsiveContainer></ChartFrame></Panel>
@@ -64,6 +91,12 @@ function App() {
           <section id="production" className="mb-5 grid scroll-mt-24 gap-5 xl:grid-cols-[1.4fr_1fr]">
             <Panel title="Machine fleet" subtitle={`${filteredMachines.length} of ${simulation.machines.length} assets visible`} icon={Boxes} action={<div className="flex gap-1">{(['All', 'Running', 'Idle', 'Fault'] as const).map((filter) => <button key={filter} onClick={() => setStatusFilter(filter)} className={`rounded-md px-2 py-1 text-[10px] font-bold ${statusFilter === filter ? 'bg-cyan-400/15 text-cyan-300' : 'text-slate-500 hover:text-slate-300'}`}>{filter}</button>)}</div>}><div className="grid gap-3 sm:grid-cols-2">{filteredMachines.map((machine) => <MachineCard key={machine.id} machine={machine} selected={machine.id === selectedMachineId} onSelect={() => setSelectedMachineId(machine.id)} onFault={() => simulation.fault(machine.id)} />)}</div>{filteredMachines.length === 0 && <EmptyState text="No machines match this filter." />}</Panel>
             <Panel title="Production throughput" subtitle="Interval output vs shift target" icon={BarChart3} action={<span className="mono text-[10px] text-slate-500">SIMULATED</span>}><ChartFrame><ResponsiveContainer width="100%" height="100%"><LineChart data={chartData}><CartesianGrid stroke="#183047" strokeDasharray="3 3" vertical={false} /><XAxis dataKey="time" tick={{ fill: '#64748b', fontSize: 10 }} tickLine={false} axisLine={false} /><YAxis tick={{ fill: '#64748b', fontSize: 10 }} tickLine={false} axisLine={false} width={40} /><Tooltip contentStyle={{ background: '#0c1c2e', border: '1px solid #28435d', borderRadius: 8, fontSize: 11 }} /><Line type="monotone" dataKey="production" name="Units / interval" stroke="#a78bfa" strokeWidth={2} dot={false} /></LineChart></ResponsiveContainer></ChartFrame><div className="mt-3 grid grid-cols-3 gap-2">{[['Target', formatNumber(totalTarget)], ['Actual', formatNumber(totalProduction)], ['Attainment', `${efficiency}%`]].map(([label, value]) => <div key={label} className="rounded-lg bg-slate-900/50 p-2"><div className="text-[10px] text-slate-500">{label}</div><div className="mt-1 text-sm font-bold text-white">{value}</div></div>)}</div></Panel>
+          </section>
+          <section id="oee" className="mb-5 scroll-mt-24">
+            <Panel title="SIMULATED OEE / TRS" subtitle="Transparent local calculation; not a measured real-world KPI" icon={Gauge} action={<span className="mono text-[10px] text-violet-300">SIMULATED</span>}>
+              <div className="grid gap-3 sm:grid-cols-4">{[['Availability', fleetOee.availability], ['Performance', fleetOee.performance], ['Quality', fleetOee.quality], ['Overall OEE', fleetOee.oee]].map(([label, value]) => <div key={label as string} className="rounded-xl border border-slate-800 bg-slate-950/30 p-4"><div className="text-[10px] uppercase tracking-wider text-slate-500">{label as string}</div><div className="mt-2 text-2xl font-extrabold text-white">{((value as number) * 100).toFixed(1)}%</div></div>)}</div>
+              <p className="mt-4 text-[10px] leading-relaxed text-slate-500">Availability = runtime ÷ planned time. Performance = actual units ÷ theoretical units at each machine’s ideal cycle time. Quality = good units ÷ total units. Invalid or zero denominators safely contribute 0.</p>
+            </Panel>
           </section>
           <section id="alarms" className="grid scroll-mt-24 gap-5 xl:grid-cols-[1.4fr_1fr]">
             <Panel title="Alarm feed" subtitle="Threshold events from the simulation engine" icon={Siren} action={<span className="rounded-full bg-red-400/10 px-2 py-1 text-[10px] font-bold text-red-300">{simulation.activeAlarms.length} OPEN</span>}><div className="space-y-2">{simulation.alarms.slice(0, 5).map((alarm) => <AlarmRow key={alarm.id} alarm={alarm} onAcknowledge={() => simulation.acknowledge(alarm.id)} />)}{simulation.alarms.length === 0 && <EmptyState text="No threshold events detected. The factory is operating within configured limits." />}</div></Panel>

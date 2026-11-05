@@ -4,12 +4,12 @@ export const DEFAULT_THRESHOLDS: Thresholds = { temperature: 82, vibration: 7.5,
 export const HISTORY_LIMIT = 48;
 
 const machineSeed: Omit<Machine, 'lastUpdated'>[] = [
-  { id: 'CNC-01', name: 'CNC Milling Cell', line: 'Precision Line', status: 'Running', temperature: 64, vibration: 3.2, power: 68, production: 1840, target: 2200 },
-  { id: 'ROB-02', name: 'Robotic Assembly Arm', line: 'Assembly Line', status: 'Running', temperature: 58, vibration: 2.4, power: 61, production: 2130, target: 2500 },
-  { id: 'PRS-03', name: 'Hydraulic Press', line: 'Forming Line', status: 'Idle', temperature: 47, vibration: 1.8, power: 22, production: 920, target: 1500 },
-  { id: 'PKG-04', name: 'Packaging Station', line: 'Finishing Line', status: 'Running', temperature: 52, vibration: 2.1, power: 44, production: 2870, target: 3100 },
-  { id: 'WLD-05', name: 'Laser Welding Unit', line: 'Precision Line', status: 'Running', temperature: 71, vibration: 4.7, power: 82, production: 1290, target: 1800 },
-  { id: 'INS-06', name: 'Vision Inspection Gate', line: 'Quality Line', status: 'Running', temperature: 43, vibration: 1.1, power: 29, production: 3050, target: 3200 },
+  { id: 'CNC-01', name: 'CNC Milling Cell', line: 'Precision Line', status: 'Running', temperature: 64, vibration: 3.2, power: 68, production: 1840, target: 2200, plannedProductionTimeSeconds: 28800, runTimeSeconds: 21600, idealCycleTimeSeconds: 8, goodUnits: 1803, totalUnits: 1840 },
+  { id: 'ROB-02', name: 'Robotic Assembly Arm', line: 'Assembly Line', status: 'Running', temperature: 58, vibration: 2.4, power: 61, production: 2130, target: 2500, plannedProductionTimeSeconds: 28800, runTimeSeconds: 23400, idealCycleTimeSeconds: 7, goodUnits: 2087, totalUnits: 2130 },
+  { id: 'PRS-03', name: 'Hydraulic Press', line: 'Forming Line', status: 'Idle', temperature: 47, vibration: 1.8, power: 22, production: 920, target: 1500, plannedProductionTimeSeconds: 28800, runTimeSeconds: 14400, idealCycleTimeSeconds: 10, goodUnits: 902, totalUnits: 920 },
+  { id: 'PKG-04', name: 'Packaging Station', line: 'Finishing Line', status: 'Running', temperature: 52, vibration: 2.1, power: 44, production: 2870, target: 3100, plannedProductionTimeSeconds: 28800, runTimeSeconds: 25200, idealCycleTimeSeconds: 5, goodUnits: 2813, totalUnits: 2870 },
+  { id: 'WLD-05', name: 'Laser Welding Unit', line: 'Precision Line', status: 'Running', temperature: 71, vibration: 4.7, power: 82, production: 1290, target: 1800, plannedProductionTimeSeconds: 28800, runTimeSeconds: 19800, idealCycleTimeSeconds: 12, goodUnits: 1251, totalUnits: 1290 },
+  { id: 'INS-06', name: 'Vision Inspection Gate', line: 'Quality Line', status: 'Running', temperature: 43, vibration: 1.1, power: 29, production: 3050, target: 3200, plannedProductionTimeSeconds: 28800, runTimeSeconds: 27000, idealCycleTimeSeconds: 4, goodUnits: 2990, totalUnits: 3050 },
 ];
 
 export const initialMachines = (now = Date.now()): Machine[] =>
@@ -26,6 +26,7 @@ export const createInitialState = (now = Date.now()): SimulationState => ({
     production: machine.production,
     productionDelta: 0,
     energyKwh: 0,
+    status: machine.status,
   })),
   alarms: [],
   tick: 0,
@@ -45,7 +46,10 @@ export function updateSimulation(state: SimulationState, now: number, thresholds
     const vibration = bounded(machine.vibration + variation(tick + index * 2, 0.12) + (machine.status === 'Fault' ? 1.5 : 0), 0.2, 12);
     const power = bounded(machine.power + variation(tick + index * 3, 2.5) + (machine.status === 'Idle' ? -1 : 0), 8, 115);
     const increment = machine.status === 'Running' ? Math.max(0, Math.round(7 + variation(tick + index, 2))) : 0;
-    return { ...machine, temperature, vibration, power, production: machine.production + increment, lastUpdated: now };
+    const elapsedSeconds = Math.max(0, (now - machine.lastUpdated) / 1000);
+    const runTimeSeconds = bounded(machine.runTimeSeconds + (machine.status === 'Running' ? elapsedSeconds : 0), 0, machine.plannedProductionTimeSeconds);
+    const rejectedUnits = increment > 0 && (tick + index) % 17 === 0 ? 1 : 0;
+    return { ...machine, temperature, vibration, power, production: machine.production + increment, totalUnits: machine.totalUnits + increment, goodUnits: machine.goodUnits + increment - rejectedUnits, runTimeSeconds, lastUpdated: now };
   });
   const newReadings: SensorReading[] = machines.map((machine) => ({
     timestamp: now,
@@ -56,6 +60,7 @@ export function updateSimulation(state: SimulationState, now: number, thresholds
     production: machine.production,
     productionDelta: Math.max(0, machine.production - (previousReadings.get(machine.id)?.production ?? machine.production)),
     energyKwh: machine.power * elapsedHours,
+    status: machine.status,
   }));
   const readings = [...state.readings, ...newReadings].slice(-HISTORY_LIMIT * machines.length);
   const alarms = state.alarms.map((alarm) => {

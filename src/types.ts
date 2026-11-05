@@ -1,5 +1,6 @@
 export type MachineStatus = 'Running' | 'Idle' | 'Fault';
 export type AlarmSeverity = 'Critical' | 'Warning' | 'Info';
+export type HistoryMeasurement = 'temperature' | 'vibration' | 'power' | 'production';
 
 export interface Machine {
   id: string;
@@ -11,6 +12,11 @@ export interface Machine {
   power: number;
   production: number;
   target: number;
+  plannedProductionTimeSeconds: number;
+  runTimeSeconds: number;
+  idealCycleTimeSeconds: number;
+  goodUnits: number;
+  totalUnits: number;
   lastUpdated: number;
 }
 
@@ -23,6 +29,7 @@ export interface SensorReading {
   production: number;
   productionDelta: number;
   energyKwh: number;
+  status: MachineStatus;
 }
 
 export interface Alarm {
@@ -51,4 +58,11 @@ export interface Thresholds {
   temperature: number;
   vibration: number;
   power: number;
+}
+
+export interface OeeMetrics {
+  availability: number;
+  performance: number;
+  quality: number;
+  oee: number;
 }
